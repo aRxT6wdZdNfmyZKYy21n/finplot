@@ -35,8 +35,6 @@ from pyqtgraph import (
     QtCore
 )
 
-from ._version import __version__
-
 from .finplot_utils import (
     add_horizontal_band,
     add_rect,
