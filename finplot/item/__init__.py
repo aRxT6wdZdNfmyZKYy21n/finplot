@@ -1,8 +1,18 @@
 from math import ceil, floor
 import numpy as np
 import pandas as pd
-import pyqtgraph as pg
 from pyqtgraph import QtCore, QtGui
+from finplot.constants import *  # TODO
+from finplot.utils import (
+    brighten,
+    horizvol_colorfilter,
+    _x2year,
+    _x2local_t,
+    _is_str_midnight,
+    _get_datasrc,
+    _pdtime2index,
+    _makepen,
+)
 
 
 class EpochAxisItem(pg.AxisItem):
