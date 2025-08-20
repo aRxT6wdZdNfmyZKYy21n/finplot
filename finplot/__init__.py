@@ -10,13 +10,10 @@ where the Y-axis is auto-scaled to highest high and lowest low in the active
 region.
 '''
 
-from ._version import __version__
-
 from ast import literal_eval
 from collections import OrderedDict, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from dateutil.tz import tzlocal
-from decimal import Decimal
 from functools import partial, partialmethod
 from finplot.live import Live
 from math import ceil, floor, fmod
@@ -3156,15 +3153,6 @@ try:
         print('See https://github.com/pyqtgraph/pyqtgraph/issues/1057')
 except:
     pass
-
-import locale
-code,_ = locale.getdefaultlocale()
-if code is not None and \
-    (any(sanctioned in code.lower() for sanctioned in '_ru _by ru_ by_'.split()) or \
-     any(sanctioned in code.lower() for sanctioned in 'ru be'.split())):
-    import os
-    os._exit(1)
-    assert False
 
 # default to black-on-white
 pg.widgets.GraphicsView.GraphicsView.wheelEvent = partialmethod(_wheel_event_wrapper, pg.widgets.GraphicsView.GraphicsView.wheelEvent)
