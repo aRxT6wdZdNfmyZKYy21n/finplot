@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import setuptools
-
-from _version import __version__
+from finplot._version import __version__
 
 with open('README.md', 'r') as fh:
     long_description = fh.read()
