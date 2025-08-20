@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import setuptools
-from finplot._version import __version__
+from _version import __version__
 
 with open('README.md', 'r') as fh:
     long_description = fh.read()
@@ -14,7 +14,7 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/highfestiva/finplot',
-    packages=['finplot'],
+    packages=['finplot', 'finplot.item'],
     install_requires=['numpy>=1.23.5', 'pandas>=1.5.2', 'PyQt6>=6.4.0', 'pyqtgraph>=0.13.1', 'python-dateutil'],
     classifiers=[
         'Programming Language :: Python :: 3',
