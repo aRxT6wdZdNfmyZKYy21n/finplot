@@ -1,61 +1,38 @@
-"""
+'''
 For simplifying plot updating.
-"""
-
+'''
 
 import finplot
 
 
-class Live(object):
+class Live:
     def __init__(self):
         self.colors = {}
         self.item = None
         self.item_create_func_name = ''
 
-    def item_create_call(self, name):
-        val = (
-            getattr(
-                finplot,
-                name
-            )
-        )
 
+    def item_create_call(self, name):
+        val = getattr(finplot, name)
         if not callable(val):
             return val
-
         def wrap_call(*args, **kwargs):
             if 'gfx' in kwargs: # only used in subsequent update calls
                 del kwargs['gfx']
-
             item = val(*args, **kwargs)
             if isinstance(item, finplot.pg.GraphicsObject): # some kind of plot?
                 setattr(self, 'item', item)
                 setattr(self, 'item_create_func_name', val.__name__)
-
                 # update to the "root" colors dict, if set
                 if self.colors:
-                    item.colors.update(
-                        self.colors
-                    )
-
+                    item.colors.update(self.colors)
                 # from hereon, use the item.colors instead, if present
-                if (
-                        hasattr(
-                            item,
-                            'colors'
-                        )
-                ):
-                    setattr(
-                        self,
-                        'colors',
-                        item.colors
-                    )
-
+                if hasattr(item, 'colors'):
+                    setattr(self, 'colors', item.colors)
                 return self
-
             return item
-
         return wrap_call
+
 
     def item_update_call(self, name):
         if name == self.item_create_func_name:
@@ -66,6 +43,7 @@ class Live(object):
                 item.update_data(*args, **ka)
             return wrap_call
         return getattr(self.item, name)
+
 
     def __getattribute__(self, name):
         try:
