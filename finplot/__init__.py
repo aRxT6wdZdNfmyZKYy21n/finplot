@@ -12,87 +12,25 @@ region.
 
 from ast import literal_eval
 from collections import OrderedDict, defaultdict
-from datetime import datetime
-from dateutil.tz import tzlocal
 from functools import partial, partialmethod
+from finplot.constants import *  # TODO: direct imports
+from finplot.fin_cross_hair import FinCrossHair
+from finplot.fin_rect import FinRect
+from finplot.item.fin_legend import FinLegendItem
+from finplot.item.y_axis import YAxisItem
 from finplot.live import Live
-from math import ceil, floor, fmod
+from finplot.utils import (
+    clamp_xy,
+    round_,
+    x2local_t,
+)
+from finplot.y_scale import YScale
+from math import ceil, fmod
 import numpy as np
 import os.path
 import pandas as pd
 import pyqtgraph as pg
-from pyqtgraph import QtCore, QtGui
-
-
-
-# appropriate types
-ColorMap = pg.ColorMap
-
-# module definitions, mostly colors
-legend_border_color = '#777'
-legend_fill_color   = '#666a'
-legend_text_color   = '#ddd6'
-soft_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
-hard_colors = ['#000000', '#772211', '#000066', '#555555', '#0022cc', '#ffcc00']
-colmap_clash = ColorMap([0.0, 0.2, 0.6, 1.0], [[127, 127, 255, 51], [0, 0, 127, 51], [255, 51, 102, 51], [255, 178, 76, 51]])
-foreground = '#000'
-background = '#fff'
-odd_plot_background = '#eaeaea'
-grid_alpha = 0.2
-crosshair_right_margin = 200
-crosshair_bottom_margin = 50
-candle_bull_color = '#26a69a'
-candle_bear_color = '#ef5350'
-candle_bull_body_color = background
-candle_bear_body_color = candle_bear_color
-candle_shadow_width = 1
-volume_bull_color = '#92d2cc'
-volume_bear_color = '#f7a9a7'
-volume_bull_body_color = volume_bull_color
-volume_neutral_color = '#bbb'
-poc_color = '#006'
-band_color = '#d2dfe6'
-draw_band_color = '#a0c0e0a0'
-cross_hair_color = '#0007'
-draw_line_color = '#000'
-draw_done_color = '#555'
-significant_decimals = 8
-significant_eps = 1e-8
-max_decimals = 10
-max_zoom_points = 20 # number of visible candles when maximum zoomed in
-axis_height_factor = {0: 2}
-clamp_grid = True
-right_margin_candles = 5 # whitespace at the right-hand side
-side_margin = 0.5
-lod_candles = 3000
-lod_labels = 700
-cache_candle_factor = 3 # factor extra candles rendered to buffer
-y_pad = 0.03 # 3% padding at top and bottom of autozoom plots
-y_label_width = 65
-timestamp_format = '%Y-%m-%d %H:%M:%S.%f'
-display_timezone = tzlocal() # default to local
-truncate_timestamp = True
-winx,winy,winw,winh = 300,150,800,400
-win_recreate_delta = 30
-log_plot_offset = -2.2222222e-16 # I could file a bug report, probably in PyQt, but this is more fun
-# format: mode, min-duration, pd-freq-fmt, tick-str-len
-time_splits = [('years', 2*365*24*60*60,    'YS',  4), ('months', 3*30*24*60*60,   'MS', 10), ('weeks',   3*7*24*60*60, 'W-MON', 10),
-               ('days',      3*24*60*60,     'D', 10), ('hours',        9*60*60,   '3h', 16), ('hours',        3*60*60,     'h', 16),
-               ('minutes',        45*60, '15min', 16), ('minutes',        15*60, '5min', 16), ('minutes',         3*60,   'min', 16),
-               ('seconds',           45,   '15s', 19), ('seconds',           15,   '5s', 19), ('seconds',            3,     's', 19),
-               ('milliseconds',       0,    'ms', 23)]
-
-app = None
-windows = [] # no gc
-timers = [] # no gc
-sounds = {} # no gc
-epoch_period = 1e30
-last_ax = None # always assume we want to plot in the last axis, unless explicitly specified
-overlay_axs = [] # for keeping track of candlesticks in overlays
-viewrestore = False
-key_esc_close = True # ESC key closes window
-master_data = {}
-
+from PyQt6 import QtCore, QtGui
 
 
 lerp = lambda t,a,b: t*b+(1-t)*a
@@ -107,7 +45,7 @@ class EpochAxisItem(pg.AxisItem):
     def tickStrings(self, values, scale, spacing):
         if self.mode == 'num':
             return ['%g'%v for v in values]
-        conv = _x2year if self.mode=='years' else _x2local_t
+        conv = _x2year if self.mode=='years' else x2local_t
         strs = [conv(self.vb.datasrc, value)[0] for value in values]
         if all(_is_str_midnight(s) for s in strs if s): # all at midnight -> round to days
             strs = [s.partition(' ')[0] for s in strs]
@@ -170,83 +108,6 @@ class EpochAxisItem(pg.AxisItem):
                     else:
                         x = rect.left()
         return specs
-
-
-
-class YAxisItem(pg.AxisItem):
-    def __init__(self, vb, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.vb = vb
-        self.hide_strings = False
-        self.style['autoExpandTextSpace'] = False
-        self.style['autoReduceTextSpace'] = False
-        self.next_fmt = '%g'
-
-    def tickValues(self, minVal, maxVal, size):
-        vs = super().tickValues(minVal, maxVal, size)
-        if len(vs) < 3:
-            return vs
-        return self.fmt_values(vs)
-
-    def logTickValues(self, minVal, maxVal, size, stdTicks):
-        v1 = int(floor(minVal))
-        v2 = int(ceil(maxVal))
-        minor = []
-        for v in range(v1, v2):
-            minor.extend([v+l for l in np.log10(np.linspace(1, 9.9, 90))])
-        minor = [x for x in minor if x>minVal and x<maxVal]
-        if not minor:
-            minor.extend(np.geomspace(minVal, maxVal, 7)[1:-1])
-        if len(minor) > 10:
-            minor = minor[::len(minor)//5]
-        vs = [(None, minor)]
-        return self.fmt_values(vs)
-
-    def tickStrings(self, values, scale, spacing):
-        if self.hide_strings:
-            return []
-        xform = self.vb.yscale.xform
-        return [self.next_fmt%xform(value) for value in values]
-
-    def fmt_values(self, vs):
-        xform = self.vb.yscale.xform
-        gs = ['%g'%xform(v) for v in vs[-1][1]]
-        if not gs:
-            return vs
-        if any(['e' in g for g in gs]):
-            maxdec = max([len((g).partition('.')[2].partition('e')[0]) for g in gs if 'e' in g])
-            self.next_fmt = '%%.%ie' % maxdec
-        elif gs:
-            maxdec = max([len((g).partition('.')[2]) for g in gs])
-            self.next_fmt = '%%.%if' % maxdec
-        else:
-            self.next_fmt = '%g'
-        return vs
-
-
-
-class YScale:
-    def __init__(self, scaletype, scalef):
-        self.scaletype = scaletype
-        self.set_scale(scalef)
-
-    def set_scale(self, scale):
-        self.scalef = scale
-
-    def xform(self, y):
-        if self.scaletype == 'log':
-            y = 10**y
-        y = y * self.scalef
-        return y
-
-    def invxform(self, y, verify=False):
-        y /= self.scalef
-        if self.scaletype == 'log':
-            if verify and y <= 0:
-                return -1e6 / self.scalef
-            y = np.log10(y)
-        return y
-
 
 
 class PandasDataSource:
@@ -603,115 +464,6 @@ class FinWindow(pg.GraphicsLayoutWidget):
             super().leaveEvent(ev)
 
 
-class FinCrossHair:
-    def __init__(self, ax, color):
-        self.ax = ax
-        self.x = 0
-        self.y = 0
-        self.clamp_x = 0
-        self.clamp_y = 0
-        self.infos = []
-        pen = pg.mkPen(color=color, style=QtCore.Qt.PenStyle.CustomDashLine, dash=[7, 7])
-        self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pen)
-        self.hline = pg.InfiniteLine(angle=0, movable=False, pen=pen)
-        self.xtext = pg.TextItem(color=color, anchor=(0,1))
-        self.ytext = pg.TextItem(color=color, anchor=(0,0))
-        self.vline.setZValue(50)
-        self.hline.setZValue(50)
-        self.xtext.setZValue(50)
-        self.ytext.setZValue(50)
-        self.show()
-
-    def update(self, point=None):
-        if point is not None:
-            self.x,self.y = x,y = point.x(),point.y()
-        else:
-            x,y = self.x,self.y
-        x,y = _clamp_xy(self.ax, x,y)
-        if x == self.clamp_x and y == self.clamp_y:
-            return
-        self.clamp_x,self.clamp_y = x,y
-        self.vline.setPos(x)
-        self.hline.setPos(y)
-        self.xtext.setPos(x, y)
-        self.ytext.setPos(x, y)
-        rng = self.ax.vb.y_max - self.ax.vb.y_min
-        rngmax = abs(self.ax.vb.y_min) + rng # any approximation is fine
-        sd,se = (self.ax.significant_decimals,self.ax.significant_eps) if clamp_grid else (significant_decimals,significant_eps)
-        timebased = False
-        if self.ax.vb.x_indexed:
-            xtext,timebased = _x2local_t(self.ax.vb.datasrc, x)
-        else:
-            xtext = _round_to_significant(rng, rngmax, x, sd, se)
-        linear_y = y
-        y = self.ax.vb.yscale.xform(y)
-        ytext = _round_to_significant(rng, rngmax, y, sd, se)
-        if not timebased:
-            if xtext:
-                xtext = 'x ' + xtext
-            ytext = 'y ' + ytext
-        screen_pos = self.ax.mapFromView(pg.Point(x, linear_y))
-        far_right = self.ax.boundingRect().right() - crosshair_right_margin
-        far_bottom = self.ax.boundingRect().bottom() - crosshair_bottom_margin
-        close2right = screen_pos.x() > far_right
-        close2bottom = screen_pos.y() > far_bottom
-        try:
-            for info in self.infos:
-                xtext,ytext = info(x,y,xtext,ytext)
-        except Exception as e:
-            print('Crosshair error:', type(e), e)
-        space = '      '
-        if close2right:
-            xtext = xtext + space
-            ytext = ytext + space
-            xanchor = [1,1]
-            yanchor = [1,0]
-        else:
-            xtext = space + xtext
-            ytext = space + ytext
-            xanchor = [0,1]
-            yanchor = [0,0]
-        if close2bottom:
-            yanchor = [1,1]
-            if close2right:
-                xanchor = [1,2]
-            else:
-                ytext = ytext + space
-        self.xtext.setAnchor(xanchor)
-        self.ytext.setAnchor(yanchor)
-        self.xtext.setText(xtext)
-        self.ytext.setText(ytext)
-
-    def show(self):
-        self.ax.addItem(self.vline, ignoreBounds=True)
-        self.ax.addItem(self.hline, ignoreBounds=True)
-        self.ax.addItem(self.xtext, ignoreBounds=True)
-        self.ax.addItem(self.ytext, ignoreBounds=True)
-
-    def hide(self):
-        self.ax.removeItem(self.xtext)
-        self.ax.removeItem(self.ytext)
-        self.ax.removeItem(self.vline)
-        self.ax.removeItem(self.hline)
-
-
-
-class FinLegendItem(pg.LegendItem):
-    def __init__(self, border_color, fill_color, **kwargs):
-        super().__init__(**kwargs)
-        self.layout.setVerticalSpacing(2)
-        self.layout.setHorizontalSpacing(20)
-        self.layout.setContentsMargins(2, 2, 10, 2)
-        self.border_color = border_color
-        self.fill_color = fill_color
-
-    def paint(self, p, *args):
-        p.setPen(pg.mkPen(self.border_color))
-        p.setBrush(pg.mkBrush(self.fill_color))
-        p.drawRect(self.boundingRect())
-
-
-
 class FinPolyLine(pg.PolyLineROI):
     def __init__(self, vb, *args, **kwargs):
         self.vb = vb # init before parent constructor
@@ -791,25 +543,6 @@ class FinLine(pg.GraphicsObject):
 class FinEllipse(pg.EllipseROI):
     def addRotateHandle(self, *args, **kwargs):
         pass
-
-
-class FinRect(pg.RectROI):
-    def __init__(self, ax, brush, *args, **kwargs):
-        self.ax = ax
-        self.brush = brush
-        super().__init__(*args, **kwargs)
-
-    def paint(self, p, *args):
-        r = QtCore.QRectF(0, 0, self.state['size'][0], self.state['size'][1]).normalized()
-        p.setPen(self.currentPen)
-        p.setBrush(self.brush)
-        p.translate(r.left(), r.top())
-        p.scale(r.width(), r.height())
-        p.drawRect(0, 0, 1, 1)
-
-    def addScaleHandle(self, *args, **kwargs):
-        if self.resizable:
-            super().addScaleHandle(*args, **kwargs)
 
 
 class FinViewBox(pg.ViewBox):
@@ -1112,16 +845,16 @@ class FinViewBox(pg.ViewBox):
             if x1-x0 <= 1:
                 return
         # make edges rigid
-        xl = max(_round(x0-side_margin)+side_margin, -side_margin)
-        xr = min(_round(x1-side_margin)+side_margin, datasrc.xlen+right_margin_candles-side_margin)
+        xl = max(round_(x0-side_margin)+side_margin, -side_margin)
+        xr = min(round_(x1-side_margin)+side_margin, datasrc.xlen+right_margin_candles-side_margin)
         dxl = xl-x0
         dxr = xr-x1
         if dxl > 0:
             x1 += dxl
         if dxr < 0:
             x0 += dxr
-        x0 = max(_round(x0-side_margin)+side_margin, -side_margin)
-        x1 = min(_round(x1-side_margin)+side_margin, datasrc.xlen+right_margin_candles-side_margin)
+        x0 = max(round_(x0-side_margin)+side_margin, -side_margin)
+        x1 = min(round_(x1-side_margin)+side_margin, datasrc.xlen+right_margin_candles-side_margin)
         # fetch hi-lo and set range
         _,_,hi,lo,cnt = datasrc.hilo(x0, x1)
         vr = self.viewRect()
@@ -2928,78 +2661,9 @@ def _insert_col(datasrc, col_idx, col_name, data):
         datasrc.df.insert(col_idx, col_name, data)
 
 
-def _millisecond_tz_wrap(s):
-    if len(s) > 6 and s[-6] in '+-' and s[-3] == ':': # +01:00 fmt timezone present?
-        s = s[:-6]
-    return (s+'.000000') if '.' not in s else s
-
-
-def _x2local_t(datasrc, x):
-    if display_timezone == None:
-        return _x2utc(datasrc, x)
-    return _x2t(datasrc, x, lambda t: _millisecond_tz_wrap(datetime.fromtimestamp(t/1e9, tz=display_timezone).strftime(timestamp_format)))
-
-
-def _x2utc(datasrc, x):
-    # using pd.to_datetime allow for pre-1970 dates
-    return _x2t(datasrc, x, lambda t: pd.to_datetime(t, unit='ns').strftime(timestamp_format))
-
-
-def _x2t(datasrc, x, ts2str):
-    if not datasrc:
-        return '',False
-    try:
-        x += 0.5
-        t,_,_,_,cnt = datasrc.hilo(x, x)
-        if cnt:
-            if not datasrc.timebased():
-                return '%g' % t, False
-            s = ts2str(t)
-            if not truncate_timestamp:
-                return s,True
-            if epoch_period >= 23*60*60: # daylight savings, leap seconds, etc
-                i = s.index(' ')
-            elif epoch_period >= 59: # consider leap seconds
-                i = s.rindex(':')
-            elif epoch_period >= 1:
-                i = s.index('.') if '.' in s else len(s)
-            elif epoch_period >= 0.001:
-                i = -3
-            else:
-                i = len(s)
-            return s[:i],True
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-    return '',datasrc.timebased()
-
-
 def _x2year(datasrc, x):
-    t,hasds = _x2local_t(datasrc, x)
+    t,hasds = x2local_t(datasrc, x)
     return t[:4],hasds
-
-
-def _round_to_significant(rng, rngmax, x, significant_decimals, significant_eps):
-    is_highres = (rng/significant_eps > 1e2 and rngmax<1e-2) or abs(rngmax) > 1e7 or rng < 1e-5
-    sd = significant_decimals
-    if is_highres and abs(x)>0:
-        exp10 = floor(np.log10(abs(x)))
-        x = x / (10**exp10)
-        rm = int(abs(np.log10(rngmax))) if rngmax>0 else 0
-        sd = min(3, sd+rm)
-        fmt = '%%%i.%ife%%i' % (sd, sd)
-        r = fmt % (x, exp10)
-    else:
-        eps = fmod(x, significant_eps)
-        if abs(eps) >= significant_eps/2:
-            # round up
-            eps -= np.sign(eps)*significant_eps
-        xx = x - eps
-        fmt = '%%%i.%if' % (sd, sd)
-        r = fmt % xx
-        if abs(x)>0 and rng<1e4 and r.startswith('0.0') and float(r[:-1]) == 0:
-            r = '%.2e' % x
-    return r
 
 
 def _roihandle_move_snap(vb, orig_func, pos, modifiers=QtCore.Qt.KeyboardModifier, finish=True):
@@ -3009,32 +2673,9 @@ def _roihandle_move_snap(vb, orig_func, pos, modifiers=QtCore.Qt.KeyboardModifie
     orig_func(pos, modifiers=modifiers, finish=finish)
 
 
-def _clamp_xy(ax, x, y):
-    if not clamp_grid:
-        return x, y
-    y = ax.vb.yscale.xform(y)
-    # scale x
-    if ax.vb.x_indexed:
-        ds = ax.vb.datasrc
-        if x < 0 or (ds and x > len(ds.df)-1):
-            x = 0 if x < 0 else len(ds.df)-1
-        x = _round(x)
-    # scale y
-    if y < 0.1 and ax.vb.yscale.scaletype == 'log':
-        magnitude = int(3 - np.log10(y)) # round log to N decimals
-        y = round(y, magnitude)
-    else: # linear
-        eps = ax.significant_eps
-        if eps > 1e-8:
-            eps2 = np.sign(y) * 0.5 * eps
-            y -= fmod(y+eps2, eps) - eps2
-    y = ax.vb.yscale.invxform(y, verify=True)
-    return x, y
-
-
 def _clamp_point(ax, p):
     if clamp_grid:
-        x,y = _clamp_xy(ax, p.x(), p.y())
+        x,y = clamp_xy(ax, p.x(), p.y())
         return pg.Point(x, y)
     return p
 
@@ -3140,10 +2781,6 @@ def _makepen(color, style=None, width=1):
             if dash:
                 dash[-1] += 2
     return pg.mkPen(color=color, style=QtCore.Qt.PenStyle.CustomDashLine, dash=dash, width=width)
-
-
-def _round(v):
-    return floor(v+0.5)
 
 
 try:
