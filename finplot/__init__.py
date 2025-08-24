@@ -986,6 +986,7 @@ class FinPlotItem(pg.GraphicsObject):
             self.painter.drawRect(QtCore.QRectF(r, boundingRect.bottom(), -1e-3, -boundingRect.height()*1e-5))
 
     def boundingRect(self):
+        print(999, self.picture.boundingRect())
         return QtCore.QRectF(self.picture.boundingRect())
 
 

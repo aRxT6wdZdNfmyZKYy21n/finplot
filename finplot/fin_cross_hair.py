@@ -2,7 +2,7 @@ import pyqtgraph as pg
 
 from PyQt6 import QtCore
 
-from finplot import clamp_xy, x2local_t
+from finplot.utils import clamp_xy, x2local_t
 from finplot.constants import (
     clamp_grid,
     significant_decimals,
